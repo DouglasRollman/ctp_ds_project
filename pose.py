@@ -512,6 +512,7 @@ Visualizing Pose Data via OpenCV and MediaPipe
 # Define keypoint connections (from BlazePose)
 # Global variable for keypoint connections do not delete or change
 keypoint_connections = [
+    (0,4), (0,1),
     (6, 5), (4, 5), (6, 8),
     (1, 2), (2, 3), (3, 7),
     (10, 9),
@@ -689,19 +690,6 @@ def display_keypoints_imgs(df):
     Return:
     - None: The function displays each set of keypoints on a blank canvas.
     """
-    
-    # Define keypoint connections (from BlazePose) if needed
-    keypoint_connections = [
-        (6, 5), (4, 5), (6, 8),
-        (1, 2), (2, 3), (3, 7),
-        (10, 9),
-        (20, 18), (18, 16), (16, 22), (16, 20),
-        (16, 14), (14, 12), (12, 11), (11, 13),
-        (13, 15), (15, 21), (15, 19), (15, 17), (19, 17),
-        (12, 24), (11, 23), (24, 23),
-        (24, 26), (26, 28), (32, 28), (30, 28), (32, 30),
-        (23, 25), (27, 25), (27, 29), (29, 31), (27, 31)
-    ]
 
     # Iterate through each row in the DataFrame
     for index, row in df.iterrows():
@@ -725,7 +713,7 @@ def display_keypoints_imgs(df):
                 cx, cy = int(x * width), int(y * height)
                 scaled_keypoints.append((cx, cy))
                 # Draw keypoint as a small circle
-                cv2.circle(frame, (cx, cy), 5, (255, 255, 255), -1)
+                cv2.circle(frame, (cx, cy), 3, (255, 255, 255), -1)
             else:
                 scaled_keypoints.append(None)  # If not visible, mark as None
 
