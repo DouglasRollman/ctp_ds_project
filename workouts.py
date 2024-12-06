@@ -215,10 +215,6 @@ def smooth_angle(angle, window):
     return np.mean(window)
 
 def track_shoulder_presses_on_video(input_video, output_video, csv_output):
-    import cv2
-    import csv
-    from collections import deque
-    import mediapipe as mp
 
     # Open the input video
     cap = cv2.VideoCapture(input_video)
