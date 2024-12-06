@@ -1,2 +1,6 @@
 # Ignore all .mp4 files
 *.mp4
+pose.ipynb
+pose.py
+start.ipynb
+!dumbbell_overhead_shoulder_press_output.mp4
