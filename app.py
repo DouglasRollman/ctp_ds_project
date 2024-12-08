@@ -6,7 +6,6 @@ import time
 from threading import Lock
 from collections import deque
 import statistics
-import csv
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -20,10 +19,6 @@ camera = None
 pose = None
 camera_lock = Lock()
 camera_initialized = False
-
-# Data for CSV
-csv_file = 'exercise_data.csv'
-fieldnames = ['Time', 'Wrist_Y', 'Angle', 'State', 'Rep Count']
 
 def check_body_alignment(landmarks):
     """Analyze body alignment and return feedback."""
@@ -139,9 +134,7 @@ class FormAnalyzer:
             drift = abs(l_elbow.x - l_shoulder.x)
             if drift > self.exercise_ranges[exercise_type]["max_elbow_drift"]:
                 stability_score -= (drift * 200)  # Reduce score based on drift
-        
-        #LATERAL RAISE SECTION
-
+                
         elif exercise_type == "lateral_raise":
             # Check arm straightness
             l_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
@@ -384,10 +377,7 @@ def process_frame(frame, exercise_type):
     try:
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image.flags.writeable = False
-
-
         results = pose.process(image)
-
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
@@ -401,16 +391,6 @@ def process_frame(frame, exercise_type):
             alignment_feedback = check_body_alignment(landmarks)
             if alignment_feedback:
                 exercise_feedback.extend(alignment_feedback)
-
-            # Get coordinates for right arm
-            r_shoulder = [landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x,
-                        landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y]
-            r_elbow = [landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].x,
-                        landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].y]
-            r_wrist = [landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].x,
-                        landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].y]
-            r_hip = [landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x,
-                    landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y]    
             
             # Extract common landmarks
             l_shoulder = [landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
@@ -422,10 +402,6 @@ def process_frame(frame, exercise_type):
             l_hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
                     landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
             
-            # Calculate midpoints for "RESTING" logic
-            left_midpoint = (l_shoulder[1] + l_hip[1]) / 2
-            right_midpoint = (r_shoulder[1] + r_hip[1]) / 2
-            
             # Track velocity for tempo feedback
             current_time = time.time()
             time_since_last_rep = current_time - state.last_update
@@ -436,8 +412,6 @@ def process_frame(frame, exercise_type):
             
             angles_to_analyze = []
             is_rep_complete = False
-
-            rest_threshold = 5.0  # Time in seconds to classify as resting
             
             if exercise_type == "bicep_curl":
                 angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
@@ -445,109 +419,100 @@ def process_frame(frame, exercise_type):
                     state.debug_info = f"Bicep Curl - Angle: {angle:.1f}°, Stage: {state.stage}"
                     angles_to_analyze.append(angle)
 
-                    wrist_y = l_wrist[1]  # Capture wrist's Y-coordinate
-
-                    state_info = state.stage  # Current state, e.g., "up", "down"
-                    log_data(wrist_y, angle, state_info, state.stage)
-
-                    # Enhanced range of motion tracking with resting state
+                    # Angle display for bicep curl
+                    cv2.putText(image, f"Elbow Angle: {angle:.1f}°", 
+                              (40, 300), cv2.FONT_HERSHEY_SIMPLEX, 
+                              2.0, (245, 117, 66), 3)
                     
-
                     # Enhanced range of motion tracking
-                    if angle > 120 and state.stage == "up":  # Down position
+                    if angle > 120:  # Down position
                         if state.stage != "down":
                             state.stage = "down"
                             feedback = "Now curl up with control"
                             exercise_feedback.append(feedback)
                             if time_since_last_rep < 1.0:
                                 exercise_feedback.append("Slow down slightly")
-
                     elif angle < 90:  # Up position
-                        if state.stage == "down" or state.stage == "resting":
+                        if state.stage == "down":
                             state.stage = "up"
                             state.increment_counter()
                             is_rep_complete = True
                             feedback = "Great curl!"  # Add positive feedback
-                            exercise_feedback.append(feedback)
-
-                    elif angle > 120 and time_since_last_rep > rest_threshold:
-                        # Check for resting state
-                        if state.stage != "resting":
-                            state.stage = "resting"
-                            feedback = "Take a rest or prepare for the next rep."
-                            exercise_feedback.append(feedback)
-                          
+                            exercise_feedback.append(feedback)  
+                            
                     # Check elbow position
                     if abs(l_elbow[0] - l_shoulder[0]) > 0.1:
                         exercise_feedback.append("Keep elbow close to body")
-
-            #LATERAL RAISE SECTION
-
+                            
             elif exercise_type == "lateral_raise":
-                angle = calculate_angle(l_hip, l_shoulder, l_elbow)
-                if angle is not None:
-                    state.debug_info = f"Lateral Raise - Angle: {angle:.1f}°, Stage: {state.stage}"
-                    angles_to_analyze.append(angle)
-                    
+                shoulder_angle = calculate_angle(l_hip, l_shoulder, l_elbow)
+                elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
+                if shoulder_angle is not None and elbow_angle is not None:
+                    state.debug_info = f"Lateral Raise - Shoulder Angle: {shoulder_angle:.1f}°, Elbow Angle: {elbow_angle:.1f}°"
+                    angles_to_analyze.append(shoulder_angle)
+
+                    # Angle displays for lateral raise
+                    cv2.putText(image, f"Shoulder Angle: {shoulder_angle:.1f}°",
+                                (40, 300), cv2.FONT_HERSHEY_SIMPLEX,
+                                2.0, (245, 117, 66), 3)
+                    cv2.putText(image, f"Elbow Angle: {elbow_angle:.1f}°",
+                                (40, 340), cv2.FONT_HERSHEY_SIMPLEX,
+                                2.0, (245, 117, 66), 3)
+
                     # Enhanced feedback for lateral raises
-                    if angle < 25 and state.stage == "up":  # Changed from 20 - Down position
-                        state.stage = "down"
-                        feedback = "Raise arms with control"
-                        exercise_feedback.append(feedback)
-                    elif angle > 65 and (state.stage == "down" or state.stage == "resting"):  # Changed from 75 - Up position
-                        state.stage = "up"
-                        state.increment_counter()
-                        is_rep_complete = True
-                        feedback = "Good height!"
-                        exercise_feedback.append(feedback)
-                    elif state.stage == "down" and time_since_last_rep > rest_threshold:
-                        state.stage = "resting"
-                        feedback = "Take a rest or prepare for the next rep."
-                        exercise_feedback.append(feedback)
-                    
+                    if shoulder_angle < 25:  # Down position
+                        if state.stage != "down":
+                            state.stage = "down"
+                            feedback = "Raise arms with control"
+                            exercise_feedback.append(feedback)
+                    elif shoulder_angle > 65:  # Up position
+                        if state.stage == "down":
+                            state.stage = "up"
+                            state.increment_counter()
+                            is_rep_complete = True
+                            feedback = "Good height!"
+                            exercise_feedback.append(feedback)
+
                     # Check for straight arms
-                    elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
-                    if elbow_angle and elbow_angle < 160:
+                    if elbow_angle < 160:
                         exercise_feedback.append("Keep arms straighter")
 
-
-            # SHOULDER PRESS Section Begin
-
+                            
             elif exercise_type == "shoulder_press":
-                angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
-                if angle is not None:
-                    state.debug_info = f"Shoulder Press - Angles: {angle:.1f}°, Stage: {state.stage}"
-                    angles_to_analyze.extend([angle])
+                angle1 = calculate_angle(l_hip, l_shoulder, l_elbow)
+                angle2 = calculate_angle(l_shoulder, l_elbow, l_wrist)
+                if angle1 is not None and angle2 is not None:
+                    state.debug_info = f"Shoulder Press - Angles: {angle1:.1f}°, {angle2:.1f}°, Stage: {state.stage}"
+                    angles_to_analyze.extend([angle1, angle2])
 
                     # Check for shoulder alignment during the movement
                     shoulder_level = abs(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y - 
                            landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y)
-                    
+
+                    # Display angles
+                    cv2.putText(image, f"L Shoulder: {angle1:.1f}°",
+                            (40, 260), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 0, 0), 3)
+                    cv2.putText(image, f"R Shoulder: {angle2:.1f}°",
+                            (40, 300), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 0, 0), 3)
                     
                     # Adjusted thresholds for better rep detection
-                    if angle < 120 and state.stage == "up":  # Wrists above midpoint, Relaxed from 60/140 - Down position
-                        state.stage = "down"
-                        feedback = "Press up with control"
-                        exercise_feedback.append(feedback)
+                    if angle1 < 80 and angle2 > 110:  # Relaxed from 60/140 - Down position
+                        if state.stage != "down":
+                            state.stage = "down"
+                            feedback = "Press up with control"
+                            exercise_feedback.append(feedback)
 
-                    elif angle > 140 and l_wrist[1] <= l_shoulder[1]:  # Relaxed from 75/70 - Up position
-                        if state.stage != "up":
+                    elif angle1 > 60 and angle2 < 100:  # Relaxed from 75/70 - Up position
+                        if state.stage == "down":
                             state.stage = "up"
                             state.increment_counter()
                             is_rep_complete = True
-                            if angle > 160:  # Full lockout
+                            if angle1 > 160:  # Full lockout
                                 exercise_feedback.append("Great lockout!")
                             if shoulder_level > 0.08:
                                 exercise_feedback.append("Keep shoulders level")
 
-                    elif state.stage == "down" and l_wrist[1] > left_midpoint:  # Wrist below midpoint
-                        if state.stage != "resting":
-                            state.stage = "resting"
-                            feedback = "Take a rest or prepare for the next rep."
-                            exercise_feedback.append(feedback)
-                    
-                            
-                    if angle > 150:  # Full lockout
+                    if angle1 > 150:  # Full lockout
                         exercise_feedback.append("Great lockout!")
                     
                     # Check shoulder alignment
@@ -555,8 +520,6 @@ def process_frame(frame, exercise_type):
                                     landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y)
                     if shoulder_level > 0.08:
                         exercise_feedback.append("Keep shoulders level")
-
-            # SHOULDER PRESS Section End
                     
         # Check for fatigue
         fatigue_feedback = form_analyzer.analyze_fatigue()
@@ -573,13 +536,9 @@ def process_frame(frame, exercise_type):
                       (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 
                       3.0, (0, 255, 0), 4)
             
-        # Draw stage indicator
-        cv2.putText(image, f"Stage: {state.stage.upper()}", 
-                      (40, 300), cv2.FONT_HERSHEY_SIMPLEX, 
-                      2.5, (245, 117, 66), 3)
             
         # Draw form feedback if it exists
-        if state.form_feedback and state.stage != "resting":
+        if state.form_feedback:
             feedback_lines = state.form_feedback.split('|')
             y_position = 400
             for i, feedback_line in enumerate(feedback_lines):
@@ -617,21 +576,6 @@ def process_frame(frame, exercise_type):
     except Exception as e:
         print(f"Error processing frame: {str(e)}")
         return frame
-    
-
-def log_data(wrist_y, angle, rep_count, stage):
-    """Log the data to CSV file."""
-    current_time = time.time()
-    
-    with open(csv_file, 'a', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writerow({
-            'Time': current_time,
-            'Wrist_Y': wrist_y,
-            'Angle': angle,
-            'State': stage,  
-            'Rep Count': rep_count
-        })
 
 def generate_frames(exercise_type):
     """Generate frames for video streaming."""
