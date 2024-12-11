@@ -511,11 +511,6 @@ def process_frame(frame, exercise_type):
                 if shoulder_angleL is not None and elbow_angleL is not None:
                     state.debug_info = f"Lateral Raise - Shoulder Angle: {shoulder_angleL:.1f}°, Elbow Angle: {elbow_angleL:.1f}°"
                     angles_to_analyze.append(shoulder_angleL)
-
-                    # Angle displays for lateral raise
-                    cv2.putText(image, f"Shoulder Angle: {shoulder_angleL:.1f}°",
-                                (40, 300), cv2.FONT_HERSHEY_SIMPLEX,
-                                2.0, (245, 117, 66), 3)
                     
                     # Convert joint coordinates to image space
                     image_height, image_width, _ = image.shape
@@ -682,7 +677,13 @@ def process_frame(frame, exercise_type):
             
         # Draw rep counter
         cv2.putText(image, f"Reps: {state.counter}", 
-                      (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 
+                      (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 
+                      3.0, (0, 255, 0), 4)
+
+
+        # Draw rep counter
+        cv2.putText(image, f"Stage: {state.stage}", 
+                      (40, 650), cv2.FONT_HERSHEY_SIMPLEX, 
                       3.0, (0, 255, 0), 4)
             
             
