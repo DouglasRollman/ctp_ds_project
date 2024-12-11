@@ -6,7 +6,6 @@ import time
 from threading import Lock
 from collections import deque
 import statistics
-import csv
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -20,10 +19,6 @@ camera = None
 pose = None
 camera_lock = Lock()
 camera_initialized = False
-
-# Data for CSV
-csv_file = 'exercise_data.csv'
-fieldnames = ['Time', 'Wrist_Y', 'Angle', 'State', 'Rep Count']
 
 def check_body_alignment(landmarks):
     """Analyze body alignment and return feedback."""
@@ -171,18 +166,28 @@ class FormAnalyzer:
         return total_score, score_components
         
     def analyze_form(self, current_angles, landmarks, exercise_type, is_rep_complete=False):
-        """Analyze form wih specific reasoning and provide updated reasoning."""
+        """Analyze form with specific reasoning and provide updated reasoning."""
         current_time = time.time()
         rep_duration = current_time - self.last_rep_time
         
         if is_rep_complete:
+            print("Rep completed!")
+            # Update the total reps based on actual rep count
+            self.total_reps += 1  # +1 for current rep
+
+            state.increment_counter()
+            print(f"Rep counts - FormAnalyzer: {self.total_reps}, State: {state.counter}")
+
+            # Calculate the rep score and update quality metrics
             score, components = self.calculate_rep_score(
-                exercise_type, 
-                current_angles, 
-                rep_duration, 
-                landmarks
+                exercise_type, current_angles, rep_duration, landmarks
             )
             self.rep_quality_scores.append(score)
+            print(f"Added rep score: {score}")
+            
+            # Append the rep duration for analysis  
+            self.rep_times.append(rep_duration)
+            print(f"Added rep duration: {rep_duration}")
             
             # Generate detailed feedback based on score components
             feedback = []
@@ -192,9 +197,8 @@ class FormAnalyzer:
                 feedback.append("Control your tempo")
             if components['stability'] < 21:  # Below 70% of max stability score
                 feedback.append("Focus on stability")
-                
-            self.rep_times.append(rep_duration)
-            
+
+            # Update feedback in the state object
             return len(feedback) == 0, " | ".join(feedback) if feedback else "Good form!"
             
         self.last_rep_time = current_time
@@ -202,89 +206,78 @@ class FormAnalyzer:
         
     def get_workout_summary(self):
         """Generate a comprehensive workout summary with detailed metrics and insights."""
-        if self.total_reps == 0:
-            return {
-                "total_reps": 0,
-                "form_percentage": 0,
-                "avg_rep_time": 0,
-                "feedback": "No workout data available."
+        try:
+            # Handle case where no reps were completed
+            if self.total_reps == 0 or not self.rep_quality_scores:
+                return {
+                    "total_reps": 0,
+                    "form_percentage": 0,
+                    "avg_rep_time": 0,
+                    "time_consistency": 0,
+                    "form_consistency": 0,
+                    "feedback": "No workout data available."
+                }
+                
+            # Calculate basic metrics - multiply by 1.0 to ensure float division
+            form_percentage = sum(self.rep_quality_scores) * 1.0 / len(self.rep_quality_scores)
+            avg_rep_time = sum(self.rep_times) / len(self.rep_times)
+            
+            # Calculate consistency metrics (if more than one rep)
+            time_consistency = 0
+            form_consistency = 0
+            if len(self.rep_times) > 1:
+                time_consistency = statistics.stdev(self.rep_times)
+            if len(self.rep_quality_scores) > 1:
+                form_consistency = statistics.stdev(self.rep_quality_scores)
+                
+            # Prepare summary dictionary with proper rounding
+            summary = {
+                "total_reps": self.total_reps,
+                "form_percentage": round(form_percentage, 1),
+                "avg_rep_time": round(avg_rep_time, 2),  # Changed from 1 to 2 decimal places
+                "time_consistency": round(time_consistency, 2),
+                "form_consistency": round(form_consistency, 2)
             }
             
-        # Calculate detailed metrics
-        form_percentage = statistics.mean(self.rep_quality_scores)
-        avg_rep_time = statistics.mean(self.rep_times)
-        
-        # Calculate consistency metrics
-        time_consistency = statistics.stdev(self.rep_times) if len(self.rep_times) > 1 else 0
-        form_consistency = statistics.stdev(self.rep_quality_scores) if len(self.rep_quality_scores) > 1 else 0
-        
-        # Analyze form progression
-        form_trend = []
-        window_size = 3
-        for i in range(0, len(self.rep_quality_scores) - window_size + 1):
-            window_avg = statistics.mean(self.rep_quality_scores[i:i + window_size])
-            form_trend.append(window_avg)
-        
-        # Calculate fatigue indicators
-        form_decline = False
-        endurance_issue = False
-        if len(form_trend) > 2:
-            form_decline = form_trend[-1] < form_trend[0] * 0.9  # 10% decline
-            endurance_issue = all(t < form_trend[0] * 0.95 for t in form_trend[-3:])  # Consistent decline
-        
-        summary = {
-            "total_reps": self.total_reps,
-            "form_percentage": round(form_percentage, 1),
-            "avg_rep_time": round(avg_rep_time, 1),
-            "time_consistency": round(time_consistency, 2),
-            "form_consistency": round(form_consistency, 2)
-        }
-        
-        # Generate comprehensive feedback
-        feedback = []
-        
-        # Form quality analysis
-        if form_percentage >= 90:
-            feedback.append("Outstanding form maintained throughout your workout!")
-        elif form_percentage >= 80:
-            feedback.append("Very good form overall - focus on maintaining consistent technique.")
-        elif form_percentage >= 70:
-            feedback.append("Good foundation with room for improvement in form.")
-        else:
-            feedback.append("Focus on proper form before increasing intensity.")
-
-        # Consistency insights
-        if time_consistency < 0.3 and form_consistency < 5:
-            feedback.append("Excellent workout rhythm and consistency!")
-        elif time_consistency > 0.5:
-            feedback.append("Try to maintain more consistent timing between reps.")
-        elif form_consistency > 10:
-            feedback.append("Work on maintaining consistent form quality across all reps.")
+            # Rest of your feedback generation code remains the same
+            feedback = []
             
-        # Fatigue and endurance insights
-        if form_decline and endurance_issue:
-            feedback.append("Notable form decline detected - consider shorter sets or lighter weights to maintain form.")
-        elif form_decline:
-            feedback.append("Slight form decline towards end - focus on maintaining technique throughout.")
-        
-        # Progress insights
-        if len(self.rep_quality_scores) > 5:
-            first_half = statistics.mean(self.rep_quality_scores[:len(self.rep_quality_scores)//2])
-            second_half = statistics.mean(self.rep_quality_scores[len(self.rep_quality_scores)//2:])
-            if second_half > first_half:
-                feedback.append("Great improvement in form during your workout!")
-            elif second_half < first_half * 0.9:
-                feedback.append("Consider shorter sets to maintain form quality throughout.")
-        
-        # Rep timing insights
-        if avg_rep_time < 1.5:
-            feedback.append("Consider slowing down your reps for better control and muscle engagement.")
-        elif avg_rep_time > 3.0:
-            feedback.append("Your rep pace is quite controlled - great for form but consider a slightly faster tempo for optimal training.")
+            if form_percentage >= 90:
+                feedback.append("Outstanding form maintained throughout!")
+            elif form_percentage >= 80:
+                feedback.append("Very good form overall.")
+            elif form_percentage >= 70:
+                feedback.append("Good form with room for improvement.")
+            else:
+                feedback.append("Focus on maintaining proper form.")
+                
+            if self.rep_times:
+                if avg_rep_time < 1.5:
+                    feedback.append("Try to slow down your reps slightly.")
+                elif avg_rep_time > 3.0:
+                    feedback.append("Consider a slightly faster tempo.")
+                else:
+                    feedback.append("Great rep timing!")
+                    
+            if len(self.rep_quality_scores) > 3:
+                if form_consistency < 5:
+                    feedback.append("Excellent consistency in form!")
+                elif form_consistency > 15:
+                    feedback.append("Work on maintaining consistent form.")
+                    
+            summary["feedback"] = " ".join(feedback)
+            return summary
             
-        # Join feedback with proper spacing
-        summary["feedback"] = " ".join(feedback)
-        return summary
+        except Exception as e:
+            print(f"Error generating workout summary: {str(e)}")
+            return {
+                "total_reps": self.total_reps if hasattr(self, 'total_reps') else 0,
+                "form_percentage": 0,
+                "avg_rep_time": 0,
+                "time_consistency": 0,
+                "form_consistency": 0,
+                "feedback": "Error generating workout summary."
+            }
 
 form_analyzer = FormAnalyzer()
 
@@ -317,11 +310,14 @@ class ExerciseState:
     def increment_counter(self):
         with self.lock:
             current_time = time.time()
-            min_interval = 1.0  # Minimum interval between reps in seconds
+            min_interval = 0.5  # Minimum interval between reps in seconds
             if current_time - self.last_update > min_interval:
                 self.counter += 1
                 self.last_update = current_time
                 self.feedback = f"Good rep! Count: {self.counter}"
+                print(f"Counter updated - State: {self.counter}, FormAnalyzer: {form_analyzer.total_reps}")
+                return self.counter
+            return None
 
     def reset(self):
         with self.lock:
@@ -387,12 +383,18 @@ def process_frame(frame, exercise_type):
         results = pose.process(image)
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        # Convert joint coordinates to image space
+        image_height, image_width, _ = image.shape
 
         form_correct = True
         exercise_feedback = []
+        angles_to_analyze = []
 
         if results.pose_landmarks and state.workout_active:
             landmarks = results.pose_landmarks.landmark
+
+            # Convert joint coordinates to image space
+            image_height, image_width, _ = image.shape
 
             # Alignment Check
             alignment_feedback = check_body_alignment(landmarks)
@@ -431,39 +433,57 @@ def process_frame(frame, exercise_type):
             left_midpoint = (l_shoulder[1] + l_hip[1]) / 2
             right_midpoint = (r_shoulder[1] + r_hip[1]) / 2
 
-            angles_to_analyze = []
+
             is_rep_complete = False
-            
-            
+
+
             rest_threshold = 0.0  # Time in seconds to classify as resting
 
             if exercise_type == "bicep_curl":
                 rest_threshold = 3.0
-                angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
+                elbow_angleR = calculate_angle(r_shoulder, r_elbow, r_wrist)
+                elbow_angleL = calculate_angle(l_shoulder, l_elbow, l_wrist)
 
                 wrist_y = l_wrist[1]  # Capture wrist's Y-coordinate
 
                 state_info = state.stage  # Current state, e.g., "up", "down"
-                log_data(wrist_y, angle, state_info, state.stage)
 
-                if angle is not None:
-                    state.debug_info = f"Bicep Curl - Angle: {angle:.1f}°, Stage: {state.stage}"
-                    angles_to_analyze.append(angle)
+                if elbow_angleL is not None:
+                    state.debug_info = f"Bicep Curl - Angle: {elbow_angleL:.1f}°, Stage: {state.stage}"
+                    angles_to_analyze.append(elbow_angleL)
 
-                    # Angle display for bicep curl
-                    cv2.putText(image, f"Elbow Angle: {angle:.1f}°", 
-                              (40, 300), cv2.FONT_HERSHEY_SIMPLEX, 
-                              2.0, (245, 117, 66), 3)
+                    # Convert joint coordinates to image space
+                    image_height, image_width, _ = image.shape
+
+                    # Get coordinates of left and right elbows
+                    l_elbow_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value].y * image_height)
+                    )
+                    r_elbow_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].y * image_height)
+                    )
+
+                    # Position text above the elbows
+                    l_elbow_text_pos = (l_elbow_coords[0], l_elbow_coords[1] - 20)
+                    r_elbow_text_pos = (r_elbow_coords[0], r_elbow_coords[1] - 20)
+
+                    # Angle text section: positioned above elbows for shoulder press
+                    cv2.putText(image, f"L Elbow: {elbow_angleL:.1f}°", l_elbow_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    cv2.putText(image, f"R Elbow: {elbow_angleR:.1f}°", r_elbow_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                     
                     # Enhanced range of motion tracking
-                    if angle > 120 and state.stage == "up":  # Down position
+                    if elbow_angleL > 120 and state.stage == "up":  # Down position
                         if state.stage != "down":
                             state.stage = "down"
                             feedback = "Now curl up with control"
                             exercise_feedback.append(feedback)
                             if time_since_last_rep < 1.0:
                                 exercise_feedback.append("Slow down slightly")
-                    elif angle < 90:  # Up position
+                    elif elbow_angleL < 90:  # Up position
                         if state.stage == "down" or state.stage == "resting":
                             state.stage = "up"
                             state.increment_counter()
@@ -471,7 +491,7 @@ def process_frame(frame, exercise_type):
                             feedback = "Great curl!"  # Add positive feedback
                             exercise_feedback.append(feedback)  
 
-                    elif angle > 120 and time_since_last_rep > rest_threshold:
+                    elif elbow_angleL > 120 and time_since_last_rep > rest_threshold:
                         # Check for resting state
                         if state.stage != "resting":
                             state.stage = "resting"
@@ -484,27 +504,69 @@ def process_frame(frame, exercise_type):
                             
             elif exercise_type == "lateral_raise":
                 rest_threshold = 5.0
-                shoulder_angle = calculate_angle(l_hip, l_shoulder, l_elbow)
-                elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
-                if shoulder_angle is not None and elbow_angle is not None:
-                    state.debug_info = f"Lateral Raise - Shoulder Angle: {shoulder_angle:.1f}°, Elbow Angle: {elbow_angle:.1f}°"
-                    angles_to_analyze.append(shoulder_angle)
+                shoulder_angleL = calculate_angle(l_hip, l_shoulder, l_elbow)
+                shoulder_angleR = calculate_angle(r_hip, r_shoulder, r_elbow)
+                elbow_angleR = calculate_angle(r_shoulder, r_elbow, r_wrist)
+                elbow_angleL = calculate_angle(l_shoulder, l_elbow, l_wrist)
+                if shoulder_angleL is not None and elbow_angleL is not None:
+                    state.debug_info = f"Lateral Raise - Shoulder Angle: {shoulder_angleL:.1f}°, Elbow Angle: {elbow_angleL:.1f}°"
+                    angles_to_analyze.append(shoulder_angleL)
 
                     # Angle displays for lateral raise
-                    cv2.putText(image, f"Shoulder Angle: {shoulder_angle:.1f}°",
+                    cv2.putText(image, f"Shoulder Angle: {shoulder_angleL:.1f}°",
                                 (40, 300), cv2.FONT_HERSHEY_SIMPLEX,
                                 2.0, (245, 117, 66), 3)
-                    cv2.putText(image, f"Elbow Angle: {elbow_angle:.1f}°",
-                                (40, 340), cv2.FONT_HERSHEY_SIMPLEX,
-                                2.0, (245, 117, 66), 3)
+                    
+                    # Convert joint coordinates to image space
+                    image_height, image_width, _ = image.shape
+
+                    # Get coordinates of left and right elbows
+                    l_elbow_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value].y * image_height)
+                    )
+                    r_elbow_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].y * image_height)
+                    )
+
+                    # Get coordinates of left and right elbows
+                    l_shoulder_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * image_height)
+                    )
+                    r_shoulder_coords = (
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * image_width),
+                        int(landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * image_height)
+                    )
+
+                    # Position text above the elbows
+                    l_elbow_text_pos = (l_elbow_coords[0], l_elbow_coords[1] - 20)
+                    r_elbow_text_pos = (r_elbow_coords[0], r_elbow_coords[1] - 20)
+
+                    # Position text above the elbows
+                    l_shoulder_text_pos = (l_shoulder_coords[0], l_shoulder_coords[1] - 20)
+                    r_shoulder_text_pos = (r_shoulder_coords[0], r_shoulder_coords[1] - 20)
+
+                    # Angle text section: positioned above elbows for shoulder press
+                    cv2.putText(image, f"L Elbow: {elbow_angleL:.1f}°", l_elbow_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    cv2.putText(image, f"R Elbow: {elbow_angleR:.1f}°", r_elbow_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    
+                    # Angle text section: positioned above elbows for shoulder press
+                    cv2.putText(image, f"L Shoulder: {shoulder_angleL:.1f}°", l_shoulder_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    cv2.putText(image, f"R Shoulder: {shoulder_angleR:.1f}°", r_shoulder_text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
                     # Enhanced feedback for lateral raises
-                    if shoulder_angle < 25:  # Down position
-                        if state.stage == "down":
+                    if shoulder_angleL < 25:  # Down position
+                        if state.stage != "down":
                             state.stage = "down"
                             feedback = "Raise arms with control"
                             exercise_feedback.append(feedback)
-                    elif shoulder_angle > 65:  # Up position
+                    elif shoulder_angleL > 65:  # Up position
                         if state.stage == "down" or state.stage == "resting":
                             state.stage = "up"
                             state.increment_counter()
@@ -517,7 +579,7 @@ def process_frame(frame, exercise_type):
                         exercise_feedback.append(feedback)
 
                     # Check for straight arms
-                    if elbow_angle < 160:
+                    if elbow_angleL < 160:
                         exercise_feedback.append("Keep arms straighter")
 
                             
@@ -529,8 +591,7 @@ def process_frame(frame, exercise_type):
                     state.debug_info = f"Shoulder Press - Angles: {angle1:.1f}°, {angle2:.1f}°, Stage: {state.stage}"
                     angles_to_analyze.extend([angle1, angle2])
 
-                        # Convert joint coordinates to image space
-                    image_height, image_width, _ = image.shape
+
 
                     # Check for shoulder alignment during the movement
                     shoulder_level = abs(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y - 
@@ -567,7 +628,7 @@ def process_frame(frame, exercise_type):
                             state.stage = "up"
                             state.increment_counter()
                             is_rep_complete = True
-                            if angle > 160:  # Full lockout
+                            if angle2 > 160:  # Full lockout
                                 exercise_feedback.append("Great lockout!")
                             if shoulder_level > 0.08:
                                 exercise_feedback.append("Keep shoulders level")
@@ -589,7 +650,7 @@ def process_frame(frame, exercise_type):
                             state.stage = "up"
                             state.increment_counter()
                             is_rep_complete = True
-                            if angle > 160:  # Full lockout
+                            if angle2 > 160:  # Full lockout
                                 exercise_feedback.append("Great lockout!")
                             if shoulder_level > 0.08:
                                 exercise_feedback.append("Keep shoulders level")
@@ -619,26 +680,14 @@ def process_frame(frame, exercise_type):
         cv2.rectangle(overlay, (20, 150), (400, 550), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
             
-        # Define position for text in the top-left corner
-        top_left_corner = (40, 80)
-
-        # Draw the rep counter at the new position
+        # Draw rep counter
         cv2.putText(image, f"Reps: {state.counter}", 
-                    top_left_corner, 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    3.0, (0, 255, 0), 4)
-        
-        # Define position for text in the bottom-left corner
-        bottom_left_corner = (40, image_height - 20)
-
-        # Draw the stage indicator at the new position
-        cv2.putText(image, f"Stage: {state.stage.upper()}", 
-                    bottom_left_corner, 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    2.5, (245, 117, 66), 3)
+                      (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 
+                      3.0, (0, 255, 0), 4)
+            
             
         # Draw form feedback if it exists
-        if state.form_feedback and state.stage != "resting":
+        if state.form_feedback:
             feedback_lines = state.form_feedback.split('|')
             y_position = 400
             for i, feedback_line in enumerate(feedback_lines):
@@ -653,7 +702,13 @@ def process_frame(frame, exercise_type):
 
         # Keep form analysis and wireframe in angles_to_analyze check
         if angles_to_analyze:
-            form_correct, form_feedback = form_analyzer.analyze_form(angles_to_analyze, landmarks, is_rep_complete)
+            print(f"Analyzing form with angles: {angles_to_analyze}")
+            print(f"Is rep complete? {is_rep_complete}")
+            form_correct, form_feedback = form_analyzer.analyze_form(
+                angles_to_analyze, landmarks, exercise_type, is_rep_complete
+            )
+            print(f"Form analysis complete. Correct: {form_correct}, Feedback: {form_feedback}")
+            print(f"Current form_analyzer stats - Total reps: {form_analyzer.total_reps}, Scores: {form_analyzer.rep_quality_scores}")
                 
             if form_feedback:
                 exercise_feedback.append(form_feedback)
@@ -676,19 +731,6 @@ def process_frame(frame, exercise_type):
     except Exception as e:
         print(f"Error processing frame: {str(e)}")
         return frame
-def log_data(wrist_y, angle, rep_count, stage):
-    """Log the data to CSV file."""
-    current_time = time.time()
-    
-    with open(csv_file, 'a', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writerow({
-            'Time': current_time,
-            'Wrist_Y': wrist_y,
-            'Angle': angle,
-            'State': stage,  
-            'Rep Count': rep_count
-        })
 
 def generate_frames(exercise_type):
     """Generate frames for video streaming."""
@@ -772,13 +814,33 @@ def start_workout():
 @app.route('/stop_workout')
 def stop_workout():
     """Stop the current workout and get summary."""
-    state.workout_active = False
-    summary = form_analyzer.get_workout_summary()
-    state.workout_summary = summary
-    return jsonify({
-        'status': 'success',
-        'summary': summary
-    })
+    try:
+        print("Stopping workout...")
+        state.workout_active = False
+        
+        print(f"Current form_analyzer total_reps: {form_analyzer.total_reps}")
+        print(f"Current form_analyzer rep_times: {form_analyzer.rep_times}")
+        print(f"Current form_analyzer rep_quality_scores: {form_analyzer.rep_quality_scores}")
+        
+        # Get summary before resetting
+        summary = form_analyzer.get_workout_summary()
+        print(f"Generated summary: {summary}")
+        
+        state.workout_summary = summary
+        print(f"State workout summary after update: {state.workout_summary}")
+        
+        return jsonify({
+            'status': 'success',
+            'summary': summary
+        })
+    except Exception as e:
+        print(f"Error in stop_workout: {str(e)}")
+        import traceback
+        traceback.print_exc()  # This will print the full error traceback
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/reset_count')
 def reset_count():
